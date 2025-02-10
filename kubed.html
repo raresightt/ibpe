@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Enhanced Survival Game</title>
+  <!-- Підключення гарного моноширинного шрифту Fira Code -->
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    /* Застосовуємо lowercase до всіх елементів */
+    * {
+      text-transform: lowercase;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background-color: #000;
+      font-family: 'Fira Code', monospace;
+    }
+    canvas {
+      display: block;
+      margin: 0 auto;
+      float: left;
+    }
+    #upgradeMenu {
+      position: absolute;
+      right: 20px;
+      top: 20px;
+      width: 200px;
+      padding: 20px;
+      background-color: rgba(0, 0, 0, 0.8);
+      color: white;
+    }
+    .upgradeButton {
+      width: 100%;
+      padding: 10px;
+      margin: 5px 0;
+      background-color: white;
+      color: black;
+      border: none;
+      cursor: pointer;
+    }
+    .upgradeButton:hover {
+      background-color: #ddd;
+    }
+    #stats {
+      position: absolute;
+      left: 20px;
+      top: 20px;
+      color: white;
+    }
+    #playerStats {
+      position: absolute;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      text-align: center;
+      color: white;
+      background-color: rgba(0, 0, 0, 0.8);
+      padding: 10px;
+      border-radius: 5px;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas"></canvas>
+  <div id="stats"></div>
+  <div id="upgradeMenu">
+    <h3>upgrades</h3>
+    <div id="coins">coins: 0</div>
+    <button class="upgradeButton" onclick="upgradeFireRate()">fire rate (<span id="fireRateCost">8</span> coins)</button>
+    <button class="upgradeButton" onclick="upgradeMultishot()">multishot (<span id="multishotCost">12</span> coins)</button>
+    <button class="upgradeButton" onclick="upgradeDamage()">damage (<span id="damageCost">10</span> coins)</button>
+    <button class="upgradeButton" id="levelUpButton" onclick="upgradeLevel()" disabled>next level (score required: <span id="levelRequirement">1000</span>)</button>
+  </div>
+  <div id="playerStats">
+    <div>fire rate: level <span id="fireRateLevel">1</span> (<span id="shotsPerSecond">1.0</span> shots/sec)</div>
+    <div>multishot: level <span id="multishotLevel">1</span> (<span id="bulletsPerShot">1</span> targets)</div>
+    <div>damage: level <span id="damageLevel">1</span> (<span id="bulletDamage">1.0</span> damage)</div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+    const playerSize = 20;
+    const enemySize = 20;
+    let playerSpeed = 5;
+    let enemies = [];
+    let bullets = [];
+    let score = 0;
+    let coins = 0;
+    let gameOver = false;
+    let playerHealth = 5;
+    let maxPlayerHealth = 5;
+    let lastHitTime = 0;
+    let invincibilityTime = 1000;
+    
+    // Upgrade levels and costs
+    let fireRateLevel = 1;
+    let multishotLevel = 1;
+    let damageLevel = 1;
+    let bulletDamage = 1.0;
+    let fireRateCost = 8;
+    let multishotCost = 12;
+    let damageCost = 10;
+    
+    // Level requirements
+    const levelRequirements = [0, 1000, 2500, 3500, 5000, 7000, 9500, 12500, 16000, 20000];
+
+    function updatePlayerStats() {
+      document.getElementById('fireRateLevel').textContent = fireRateLevel;
+      document.getElementById('shotsPerSecond').textContent = (1000 / fireRate).toFixed(1);
+      document.getElementById('multishotLevel').textContent = multishotLevel;
+      document.getElementById('bulletsPerShot').textContent = multishotLevel;
+      document.getElementById('damageLevel').textContent = damageLevel;
+      document.getElementById('bulletDamage').textContent = bulletDamage.toFixed(1);
+    }
+
+    function checkLevelUpAvailability() {
+      const levelUpButton = document.getElementById('levelUpButton');
+      const requirement = levelRequirements[currentLevel];
+      document.getElementById('levelRequirement').textContent = requirement;
+      
+      if (score >= requirement) {
+        levelUpButton.disabled = false;
+        levelUpButton.style.opacity = '1';
+      } else {
+        levelUpButton.disabled = true;
+        levelUpButton.style.opacity = '0.5';
+      }
+    }
+
+    let lastShot = 0;
+    let fireRate = 1000; // ms між пострілами
+    let shotgunSpread = 1; // кількість куль за постріл
+    let currentLevel = 1;
+    let enemyHealth = 2;
+    let enemyReward = 1;
+    let spawnRate = 0.005;
+
+    // Встановлюємо розмір canvas
+    canvas.width = window.innerWidth - 250;
+    canvas.height = window.innerHeight;
+
+    // Об'єкт гравця
+    const player = {
+      x: canvas.width / 2,
+      y: canvas.height / 2,
+      width: playerSize,
+      height: playerSize,
+      color: "#fff",
+      dx: 0,
+      dy: 0
+    };
+
+    // Рух гравця
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowUp") player.dy = -playerSpeed;
+      if (e.key === "ArrowDown") player.dy = playerSpeed;
+      if (e.key === "ArrowLeft") player.dx = -playerSpeed;
+      if (e.key === "ArrowRight") player.dx = playerSpeed;
+    });
+
+    window.addEventListener("keyup", (e) => {
+      if (e.key === "ArrowUp" || e.key === "ArrowDown") player.dy = 0;
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") player.dx = 0;
+      
+      // Перезапуск гри по натисканню пробілу після закінчення гри
+      if (e.key === " " && gameOver) {
+        gameOver = false;
+        playerHealth = maxPlayerHealth;
+        enemies = [];
+        bullets = [];
+        score = 0;
+        coins = 0;
+        currentLevel = 1;
+        enemyHealth = 2;
+        enemyReward = 1;
+        spawnRate = 0.005;
+        player.x = canvas.width / 2;
+        player.y = canvas.height / 2;
+        fireRate = 1000;
+        fireRateLevel = 1;
+        multishotLevel = 1;
+        damageLevel = 1;
+        bulletDamage = 1.0;
+        fireRateCost = 8;
+        multishotCost = 12;
+        damageCost = 10;
+        
+        updatePlayerStats();
+        checkLevelUpAvailability();
+        document.getElementById('fireRateCost').textContent = fireRateCost;
+        document.getElementById('multishotCost').textContent = multishotCost;
+        document.getElementById('damageCost').textContent = damageCost;
+        
+        requestAnimationFrame(update);
+      }
+    });
+
+    // Створення ворогів
+    function createEnemy() {
+      let x, y;
+      if (Math.random() < 0.5) {
+        x = Math.random() < 0.5 ? 0 : canvas.width;
+        y = Math.random() * canvas.height;
+      } else {
+        x = Math.random() * canvas.width;
+        y = Math.random() < 0.5 ? 0 : canvas.height;
+      }
+      enemies.push({ 
+        x, 
+        y, 
+        width: enemySize, 
+        height: enemySize,
+        health: enemyHealth,
+        isTargeted: false
+      });
+    }
+
+    // Механіка пострілу
+    function shoot() {
+      const now = Date.now();
+      if (now - lastShot >= fireRate && enemies.length > 0) {
+        lastShot = now;
+
+        enemies.forEach(e => e.isTargeted = false);
+
+        let targets = [];
+        let availableEnemies = [...enemies];
+
+        for (let i = 0; i < multishotLevel && availableEnemies.length > 0; i++) {
+          let closestDist = Infinity;
+          let closestEnemy = null;
+          let closestIndex = -1;
+
+          availableEnemies.forEach((enemy, index) => {
+            const dist = Math.hypot(enemy.x - player.x, enemy.y - player.y);
+            if (dist < closestDist) {
+              closestDist = dist;
+              closestEnemy = enemy;
+              closestIndex = index;
+            }
+          });
+
+          if (closestEnemy) {
+            targets.push(closestEnemy);
+            closestEnemy.isTargeted = true;
+            availableEnemies.splice(closestIndex, 1);
+          }
+        }
+
+        targets.forEach(target => {
+          const angle = Math.atan2(target.y - player.y, target.x - player.x);
+          bullets.push({
+            x: player.x + playerSize / 2,
+            y: player.y + playerSize / 2,
+            dx: Math.cos(angle) * 10,
+            dy: Math.sin(angle) * 10
+          });
+        });
+      }
+    }
+
+    // Оновлення куль
+    function updateBullets() {
+      for (let i = bullets.length - 1; i >= 0; i--) {
+        const bullet = bullets[i];
+        bullet.x += bullet.dx;
+        bullet.y += bullet.dy;
+
+        if (bullet.x < 0 || bullet.x > canvas.width || 
+            bullet.y < 0 || bullet.y > canvas.height) {
+          bullets.splice(i, 1);
+          continue;
+        }
+
+        for (let j = enemies.length - 1; j >= 0; j--) {
+          const enemy = enemies[j];
+          if (bullet.x > enemy.x && bullet.x < enemy.x + enemy.width &&
+              bullet.y > enemy.y && bullet.y < enemy.y + enemy.height) {
+            enemy.health -= bulletDamage;
+            bullets.splice(i, 1);
+            if (enemy.health <= 0) {
+              enemies.splice(j, 1);
+              coins += enemyReward;
+              score += 100;
+            }
+            break;
+          }
+        }
+      }
+    }
+
+    // Малювання куль
+    function drawBullets() {
+      ctx.fillStyle = "#ff0";
+      bullets.forEach(bullet => {
+        ctx.beginPath();
+        ctx.arc(bullet.x, bullet.y, 3, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    // Функції покращень
+    function upgradeDamage() {
+      if (coins >= damageCost) {
+        coins -= damageCost;
+        damageLevel++;
+        bulletDamage += 0.5;
+        damageCost = Math.floor(damageCost * 1.6);
+        document.getElementById('damageCost').textContent = damageCost;
+        updatePlayerStats();
+      }
+    }
+
+    function upgradeFireRate() {
+      if (coins >= fireRateCost) {
+        coins -= fireRateCost;
+        fireRate = Math.max(100, fireRate - 100);
+        fireRateLevel++;
+        fireRateCost = Math.floor(fireRateCost * 1.5);
+        document.getElementById('fireRateCost').textContent = fireRateCost;
+        updatePlayerStats();
+      }
+    }
+
+    function upgradeMultishot() {
+      if (coins >= multishotCost) {
+        coins -= multishotCost;
+        multishotLevel++;
+        multishotCost = Math.floor(multishotCost * 1.8);
+        document.getElementById('multishotCost').textContent = multishotCost;
+        updatePlayerStats();
+      }
+    }
+
+    function upgradeLevel() {
+      if (score >= levelRequirements[currentLevel]) {
+        currentLevel++;
+        enemyHealth += 1;
+        enemyReward += 1;
+        spawnRate += 0.002;
+        checkLevelUpAvailability();
+      }
+    }
+
+    // Малювання гравця
+    function drawPlayer() {
+      if (Date.now() - lastHitTime < invincibilityTime) {
+        ctx.globalAlpha = 0.5;
+      }
+      ctx.fillStyle = player.color;
+      ctx.fillRect(player.x, player.y, player.width, player.height);
+      ctx.globalAlpha = 1.0;
+      
+      const healthBarWidth = 30;
+      const healthBarHeight = 4;
+      ctx.fillStyle = "#f00";
+      ctx.fillRect(player.x - 5, player.y - 10, healthBarWidth, healthBarHeight);
+      ctx.fillStyle = "#0f0";
+      ctx.fillRect(player.x - 5, player.y - 10, (healthBarWidth * playerHealth) / maxPlayerHealth, healthBarHeight);
+    }
+
+    // Малювання ворогів
+    function drawEnemies() {
+      enemies.forEach(enemy => {
+        ctx.fillStyle = enemy.isTargeted ? "#f00" : "#ccc";
+        ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height);
+        ctx.fillStyle = "#0f0";
+        ctx.fillRect(enemy.x, enemy.y - 5, 
+          (enemy.width * enemy.health) / enemyHealth, 3);
+      });
+    }
+
+    // Рух гравця
+    function movePlayer() {
+      player.x += player.dx;
+      player.y += player.dy;
+      if (player.x < 0) player.x = 0;
+      if (player.y < 0) player.y = 0;
+      if (player.x + player.width > canvas.width) player.x = canvas.width - player.width;
+      if (player.y + player.height > canvas.height) player.y = canvas.height - player.height;
+    }
+
+    // Рух ворогів
+    function moveEnemies() {
+      enemies.forEach(enemy => {
+        const dx = player.x - enemy.x;
+        const dy = player.y - enemy.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 0) {
+          const moveX = (dx / dist) * 1.2;
+          const moveY = (dy / dist) * 1.2;
+          
+          let canMove = true;
+          enemies.forEach(other => {
+            if (other !== enemy) {
+              const newDist = Math.hypot(
+                (enemy.x + moveX) - other.x,
+                (enemy.y + moveY) - other.y
+              );
+              if (newDist < enemySize * 1.5) {
+                canMove = false;
+              }
+            }
+          });
+          
+          if (canMove) {
+            enemy.x += moveX * 0.7;
+            enemy.y += moveY * 0.7;
+          }
+        }
+      });
+    }
+
+    // Перевірка зіткнень
+    function checkCollisions() {
+      const now = Date.now();
+      if (now - lastHitTime >= invincibilityTime) {
+        enemies.forEach(enemy => {
+          if (player.x < enemy.x + enemy.width &&
+              player.x + player.width > enemy.x &&
+              player.y < enemy.y + enemy.height &&
+              player.y + player.height > enemy.y) {
+            playerHealth--;
+            lastHitTime = now;
+            if (playerHealth <= 0) {
+              gameOver = true;
+            }
+          }
+        });
+      }
+    }
+
+    // Оновлення відображення статистики
+    function updateStats() {
+      const stats = document.getElementById("stats");
+      stats.innerHTML = `
+        score: ${score}<br>
+        level: ${currentLevel}<br>
+        enemies: ${enemies.length}
+      `;
+      document.getElementById("coins").innerHTML = `coins: ${coins}`;
+    }
+
+    // Оновлення стану гри
+    function update() {
+      if (gameOver) {
+        ctx.fillStyle = "#fff";
+        ctx.font = "30px 'Fira Code', monospace";
+        ctx.fillText("game over! score: " + score, canvas.width / 2 - 150, canvas.height / 2);
+        ctx.font = "20px 'Fira Code', monospace";
+        ctx.fillText("press space to restart", canvas.width / 2 - 100, canvas.height / 2 + 40);
+        return;
+      }
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
+      if (Math.random() < spawnRate && enemies.length < 10) createEnemy();
+      
+      shoot();
+      movePlayer();
+      moveEnemies();
+      updateBullets();
+      
+      drawPlayer();
+      drawEnemies();
+      drawBullets();
+      
+      checkCollisions();
+      updateStats();
+      updatePlayerStats();
+      checkLevelUpAvailability();
+
+      requestAnimationFrame(update);
+    }
+
+    update();
+  </script>
+</body>
+</html>
